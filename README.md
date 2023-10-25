@@ -1,6 +1,6 @@
 # facebook-crawler
 
-- what is this doing?
+- What is this doing?
   - chromedriver to crawling facebook groups data
   - LINE Notify
   - using PYTHON
