@@ -1,0 +1,8 @@
+{
+  "name": "social-watch-ui-checks",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Optional developer checks; Node.js is not required to run the app.",
+  "scripts": { "test": "node --test tests/*.test.cjs" },
+  "devDependencies": { "jsdom": "26.1.0" }
+}

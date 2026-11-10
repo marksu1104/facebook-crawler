@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#214f43">
+  <title>社團追蹤｜找到你關心的貼文</title>
+  <link rel="stylesheet" href="/static/pilot.css">
+  <script src="/static/pilot.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="page-header">
+      <a class="brand" href="/" aria-label="社團追蹤首頁"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span>社團追蹤<span class="brand-description">找到你關心的貼文</span></span></a>
+      <span class="local-label"><span aria-hidden="true"></span> 在這台電腦執行</span>
+    </header>
+    <main class="workspace">
+      <aside class="settings-column" aria-label="追蹤設定">
+        <form id="settings-form">
+          <section class="panel source-panel" aria-labelledby="source-title">
+            <div class="section-heading"><div><p class="eyebrow">追蹤設定</p><h2 id="source-title">你想關注什麼？</h2></div><span class="section-symbol" aria-hidden="true">⌕</span></div>
+            <label for="group-url">Facebook 社團網址</label>
+            <input id="group-url" name="group_url" type="url" required maxlength="500" placeholder="貼上社團首頁或分享連結" autocomplete="off">
+            <p class="help">使用你已加入、可以查看貼文的社團。</p>
+            <label for="keywords">想找的關鍵字 <span class="optional">選填</span></label>
+            <textarea id="keywords" rows="3" placeholder="輸入地點、活動或任何你關心的詞"></textarea>
+            <p class="help">用逗號或換行分隔。留空會接收所有符合其他條件的貼文。</p>
+            <details class="inline-details" id="rules-details">
+              <summary>更多比對條件 <span id="rules-summary" class="summary-value">任一關鍵字</span></summary>
+              <div class="details-body">
+                <label for="match-mode">關鍵字比對方式</label>
+                <select id="match-mode"><option value="any">符合任一關鍵字</option><option value="all">符合全部關鍵字</option></select>
+                <label for="excludes">不想看到的詞 <span class="optional">選填</span></label>
+                <textarea id="excludes" rows="2" placeholder="例如已結束、額滿"></textarea>
+                <p class="help">包含任何排除詞的貼文都不會自動通知。</p>
+              </div>
+            </details>
+            <div class="save-row"><button id="save-settings" type="submit" class="button secondary">儲存設定</button><span id="draft-status" class="draft-status">正在讀取設定…</span></div>
+          </section>
+          <details id="telegram-details" class="panel settings-details">
+            <summary><span class="details-icon" aria-hidden="true">↗</span><span class="details-title">手機通知<span class="summary-description">透過 Telegram 接收貼文連結</span></span><span id="telegram-status" class="badge">未設定</span></summary>
+            <div class="details-body">
+              <ol class="setup-guide">
+                <li><span>建立自己的 Bot</span><p>在 <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">BotFather</a> 傳送 <code>/newbot</code>，依指示取得 Token。</p></li>
+                <li><span>開啟你的 Bot 聊天室</span><p>親自傳送 <code>/start</code>，讓 Bot 可以回覆你。</p></li>
+                <li><span>連結到這個程式</span><p>儲存 Token，再讀取聊天清單並選擇自己。</p></li>
+              </ol>
+              <label for="telegram-token">Bot Token</label>
+              <input id="telegram-token" name="telegram_token" type="password" autocomplete="new-password" spellcheck="false" placeholder="貼上 BotFather 給你的 Token">
+              <p class="help">留空可沿用已設定的 Token，儲存後欄位會清空。</p>
+              <label class="checkbox-label" for="remember-telegram-token"><input id="remember-telegram-token" type="checkbox" disabled><span>記住這台電腦的 Token</span></label>
+              <p id="token-storage-status" class="help" role="status">正在讀取儲存狀態…</p>
+              <button id="save-token" type="submit" class="button secondary full-width">儲存 Token 與設定</button>
+              <button id="forget-telegram-token" type="button" class="text-button forget-token" disabled>清除 Token</button>
+              <div class="chat-setup">
+                <div class="section-heading compact"><label for="telegram-chat-id">接收通知的私人聊天</label><button id="discover-chats" type="button" class="text-button" disabled>讀取聊天清單</button></div>
+                <div id="discovered-chats-wrap" hidden>
+                  <label class="visually-hidden" for="discovered-chats">選擇自己的私人聊天</label>
+                  <select id="discovered-chats"><option value="">選擇自己的私人聊天</option></select>
+                  <p class="help">清單只表示曾與 Bot 互動，並不代表已驗證擁有者。請核對名稱與 ID。</p>
+                </div>
+                <input id="telegram-chat-id" name="telegram_chat_id" type="text" inputmode="numeric" autocomplete="off" placeholder="從清單選擇，或填入你的 Chat ID">
+                <p class="help">選好後儲存，再發送測試訊息確認手機收到通知。</p>
+              </div>
+              <div class="button-row"><button id="save-telegram" type="submit" class="button secondary">儲存通知設定</button><button id="test-telegram" type="button" class="button quiet" disabled>發送測試訊息</button></div>
+            </div>
+          </details>
+          <details class="panel settings-details" id="advanced-details">
+            <summary><span class="details-icon" aria-hidden="true">≡</span><span class="details-title">讀取與追蹤設定<span id="run-summary" class="summary-description">每 2 分鐘，最多 3 次</span></span></summary>
+            <div class="details-body">
+              <label for="max-posts-per-check">每次最多讀取篇數</label><input id="max-posts-per-check" type="number" value="20" min="1" max="50" required>
+              <p class="help">讀取時會嘗試載入更多貼文。這是篇數上限，實際數量取決於社團頁面。</p>
+              <div class="form-row"><div><label for="interval-seconds">間隔秒數</label><input id="interval-seconds" type="number" value="120" min="60" max="3600" required></div><div><label for="max-checks">最多檢查次數</label><input id="max-checks" type="number" value="3" min="1" max="10" required></div></div>
+              <div class="form-row"><div><label for="duration-minutes">最長時間（分）</label><input id="duration-minutes" type="number" value="10" min="1" max="60" required></div><div><label for="max-notifications-per-check">每輪最多自動通知</label><input id="max-notifications-per-check" type="number" value="3" min="1" max="10" required></div></div>
+              <p class="help">到達次數或時間上限即停止，可再次開始。超出通知上限的符合貼文會保留在預覽中，可手動選擇發送。</p>
+              <label for="browser">追蹤瀏覽器</label><select id="browser"><option value="auto">自動選擇</option><option value="edge">Microsoft Edge</option><option value="chrome">Google Chrome</option></select>
+              <p class="safety-note">頻率不代表帳號安全保證。遇到登入驗證或存取限制時，追蹤會暫停，等待你親自處理並確認。</p>
+            </div>
+          </details>
+        </form>
+        <p class="local-note"><span aria-hidden="true">◷</span> 電腦睡眠／關機即停止。<br>保持程式和追蹤視窗開啟，才能繼續檢查。</p>
+      </aside>
+      <div class="main-column">
+        <section class="panel workflow-panel" aria-labelledby="workflow-title">
+          <div class="section-heading"><p class="eyebrow">追蹤工作區</p><span id="phase-badge" class="badge">讀取狀態中</span></div>
+          <ol class="stepper" aria-label="設定進度"><li id="step-connect" aria-current="step"><span>1</span>連接社團</li><li id="step-preview"><span>2</span>試讀貼文</li><li id="step-track"><span>3</span>通知與追蹤</li></ol>
+          <div class="workflow-content" aria-live="polite"><p id="step-label" class="step-label">先完成連線</p><h1 id="workflow-title">正在讀取本機設定</h1><p id="workflow-description" class="workflow-description">稍候就能開始設定追蹤來源。</p></div>
+          <div class="workflow-actions"><button id="next-action" type="button" class="button primary next-action" disabled>讀取中… <span aria-hidden="true">→</span></button><span id="next-action-note" class="help"></span></div>
+          <p id="connection-error" class="message error" role="alert" hidden></p>
+          <p id="action-message" class="message" role="status" hidden></p>
+          <div id="tracking-stats" class="tracking-stats" hidden><div><span>下一次檢查</span><strong id="next-check">未排定</strong></div><div><span>本輪剩餘</span><strong id="remaining-checks">—</strong></div><div><span>上次讀取</span><strong id="last-checked">尚未讀取</strong></div></div>
+          <details id="connection-tools" class="connection-tools"><summary>連線與手動操作</summary><div class="details-body"><p id="status-message" class="status-message">正在讀取本機狀態…</p><p id="baseline-description" class="help">第一次讀取只建立起點，舊貼文不會自動通知。</p><div class="button-row"><button id="open-browser" type="button" class="button quiet" disabled>開啟追蹤視窗</button><button id="confirm-browser" type="button" class="button quiet" disabled>確認登入／限制已處理</button><button id="check-once" type="button" class="button quiet" disabled>讀取目前貼文</button><button id="start-auto" type="button" class="button quiet" disabled>開始追蹤</button><button id="stop-auto" type="button" class="button quiet" disabled>停止追蹤</button><button id="close-browser" type="button" class="text-button" disabled>關閉追蹤視窗</button></div><p class="help">讀取間隔 <span id="cooldown">—</span></p><p class="resolved-group">目前社團 <span id="resolved-group">尚未確認</span></p></div></details>
+        </section>
+        <section class="results-section" aria-labelledby="results-title">
+          <div class="results-heading"><div><p class="eyebrow">貼文預覽</p><h2 id="results-title">已收錄的貼文 <span id="post-count" class="count">0</span></h2></div><button id="refresh-state" type="button" class="text-button refresh-button"><span aria-hidden="true">↻</span> 更新畫面</button></div>
+          <div id="results-toolbar" class="results-toolbar" hidden><div class="filter-tabs" role="group" aria-label="篩選貼文"><button type="button" id="filter-all" class="filter-tab selected" aria-pressed="true">全部 <span id="all-count">0</span></button><button type="button" id="filter-matched" class="filter-tab" aria-pressed="false">符合條件 <span id="matched-count">0</span></button></div><span id="results-caption" class="help"></span></div>
+          <div id="posts"><div class="empty-state"><div class="empty-symbol" aria-hidden="true">▤</div><h3>關心的消息，會在這裡集合</h3><p>連接社團並試讀後，即可預覽貼文與關鍵字比對結果。</p><div class="empty-steps"><span>連接社團</span><span aria-hidden="true">→</span><span>試讀預覽</span><span aria-hidden="true">→</span><span>通知手機</span></div></div></div>
+          <p class="results-note">首次讀取只建立追蹤起點，不會自動通知舊文。新偵測表示首次收錄，未必剛發布。可能漏掉未載入或被截斷的內容。</p>
+        </section>
+        <details class="activity-details" id="activity-details"><summary>執行紀錄 <span id="event-count" class="count">0</span></summary><div id="events"><p class="empty">尚無紀錄</p></div></details>
+        <footer class="workspace-footer"><span>本機處理 · 自訂條件 · Telegram 通知</span><button id="shutdown" type="button" class="text-button">結束程式</button></footer>
+      </div>
+    </main>
+  </div>
+</body>
+</html>
