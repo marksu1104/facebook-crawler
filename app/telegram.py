@@ -182,11 +182,17 @@ class TelegramClient:
             chats[chat_id] = {"id": chat_id, "name": (name or "個人聊天室")[:160]}
         return list(chats.values())
 
-    def send_text(self, text: str, link: str | None = None) -> dict:
+    def send_text(self, text: str, link: str | None = None, *, parse_mode: str | None = None) -> dict:
         if self.chat_id is None:
             raise TelegramError("請先選擇接收通知的個人聊天室。")
+        if parse_mode not in (None, "HTML"):
+            raise TelegramError("通知格式不支援。")
+        if parse_mode == "HTML" and isinstance(text, str) and len(text.encode("utf-16-le", errors="replace")) > 4096 * 2:
+            raise TelegramError("格式化通知過長，請先分段。")
         payload = {"chat_id": self.chat_id, "text": _message_text(text),
                    "link_preview_options": {"is_disabled": True}}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         if link is not None:
             payload["reply_markup"] = {"inline_keyboard": [[
                 {"text": "查看原始貼文", "url": _post_link(link)}

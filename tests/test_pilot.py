@@ -111,12 +111,12 @@ class FakeTelegram:
         self.transport.calls.append("get_updates")
         return [{"id": CHAT, "name": "我"}]
 
-    def send_text(self, text, link=None):
+    def send_text(self, text, link=None, *, parse_mode=None):
         if self.transport.before_send:
             self.transport.before_send()
         if self.transport.error:
             raise self.transport.error
-        self.transport.calls.append({"text": text, "link": link, "chat": self.chat})
+        self.transport.calls.append({"text": text, "link": link, "chat": self.chat, "parse_mode": parse_mode})
         return {"message_id": len(self.transport.calls), "chat_id": self.chat}
 
 
@@ -577,6 +577,8 @@ def test_new_matching_posts_are_combined_and_all_marked_sent(session):
     assert sorted(p["notification_status"] for p in pilot.db.posts(GROUP)) == ["baseline", "sent", "sent"]
     assert all(GROUP + f"/posts/{number}/" in telegram.calls[0]["text"] for number in ("2", "3"))
     assert "首次偵測" in telegram.calls[0]["text"] and "通知時間" in telegram.calls[0]["text"]
+    assert telegram.calls[0]["parse_mode"] == "HTML"
+    assert "<blockquote>" in telegram.calls[0]["text"] and "開啟原文 ↗</a>" in telegram.calls[0]["text"]
 
 
 def test_delivery_state_survives_restart_without_automatic_replays(tmp_path):

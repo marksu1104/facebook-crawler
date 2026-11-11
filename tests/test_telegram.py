@@ -47,6 +47,23 @@ def test_send_plain_text_with_original_link_button():
     assert TOKEN not in repr(client)
 
 
+def test_formatted_digest_uses_html_without_truncating_escaped_content_or_links():
+    transport = FakeTelegram({"message_id": 3})
+    text = '<b>新貼文</b>\n<blockquote>第一行 &amp; 內容\n第二行</blockquote>\n<a href="' + POST + '">開啟原文 ↗</a>'
+    TelegramClient(TOKEN, 456, opener=transport).send_text(text, parse_mode="HTML")
+    payload = transport.requests[0]["payload"]
+    assert payload["text"] == text and payload["parse_mode"] == "HTML"
+    assert payload["link_preview_options"]["is_disabled"] is True
+    assert "reply_markup" not in payload
+
+
+def test_oversized_formatted_message_is_rejected_before_network_instead_of_cutting_a_tag():
+    transport = FakeTelegram()
+    with pytest.raises(TelegramError, match="先分段"):
+        TelegramClient(TOKEN, 456, opener=transport).send_text("<b>" + "x" * 4096 + "</b>", parse_mode="HTML")
+    assert not transport.requests
+
+
 @pytest.mark.parametrize("chat_id", ["@channel", -100123, 0, "0", "-1", True, "123/456", ""])
 def test_private_pilot_cannot_send_to_groups_or_channels(chat_id):
     with pytest.raises(TelegramError):

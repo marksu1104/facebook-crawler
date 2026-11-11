@@ -691,7 +691,7 @@ class Pilot:
             def send():
                 if not explicit_test:
                     self.db.deliveries(identities, "sending")
-                return client.send_text(text, link=batch[0]["url"] if explicit_test else None)
+                return client.send_text(text, parse_mode="HTML")
 
             try:
                 self._telegram_call(send, wait=not explicit_test, cancellable=not explicit_test)
