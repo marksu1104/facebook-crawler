@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .browser import canonical_post_url
 from .feed_traffic import FeedTraffic
+from .notifications import normalize_published_at
 
 
 FACEBOOK_HOSTS = {"facebook.com", "www.facebook.com", "m.facebook.com"}
@@ -65,6 +66,10 @@ class PilotBrowserError(Exception):
 
 class NeedsUserAction(PilotBrowserError):
     pass
+
+
+class PilotTransientError(PilotBrowserError):
+    """A bounded retry may recover while the confirmed group remains accessible."""
 
 
 class PilotCancelled(PilotBrowserError):
@@ -262,6 +267,9 @@ class PilotBrowser:
                 if self.traffic:
                     self.traffic.clear()
                 self.driver.refresh()
+            except TimeoutException:
+                self.confirm(expected_group, expected_group)
+                raise PilotTransientError("社團載入逾時。") from None
             except Exception:
                 raise PilotBrowserError("重新載入失敗，已暫停；不會立即重試。") from None
         try:
@@ -285,7 +293,10 @@ class PilotBrowser:
                 raw_url = str(item.get("url", ""))
                 url, post_id = canonical_post_url(raw_url) if post_belongs_to_group(raw_url, expected_group) else ("", "")
                 post = {"post_id": post_id, "url": url, "content": content,
-                        "author": str(item.get("author", "")).strip(), "posted_at": str(item.get("posted_at", ""))}
+                        "author": str(item.get("author", "")).strip(), "posted_at": str(item.get("posted_at", "")),
+                        "published_at": normalize_published_at(item.get("published_at", ""))}
+                if item.get("timestamp_conflict"):
+                    post["timestamp_conflict"] = True
                 if not post_id:
                     if len(unlinked) < 100:
                         unlinked[(post["author"], content)] = post
@@ -300,7 +311,13 @@ class PilotBrowser:
                         conflicts.add(post_id)
                         continue
                     if len(previous["content"]) > len(content):
-                        continue
+                        post["content"] = previous["content"]
+                    post["published_at"] = post["published_at"] or previous.get("published_at", "")
+                    post["posted_at"] = post["posted_at"] or previous["posted_at"]
+                    if previous.get("timestamp_conflict"):
+                        post["timestamp_conflict"] = True
+                if post.get("timestamp_conflict"):
+                    post["published_at"] = ""
                 posts[post_id] = post
             update_summary()
 
@@ -329,6 +346,9 @@ class PilotBrowser:
         update_summary()
         try:
             WebDriverWait(self.driver, 15, poll_frequency=0.5).until(read_loaded_posts)
+        except TimeoutException:
+            self.confirm(expected_group, expected_group)
+            raise PilotTransientError("等待社團貼文載入逾時。") from None
         except Exception:
             # Catch a login/checkpoint that appeared while the page was loading.
             self.confirm(expected_group, expected_group)

@@ -73,7 +73,8 @@ return {
     contentLength: String(post.content || '').length,
     hasAuthor: !!post.author,
     hasLink: !!post.url,
-    hasTime: !!post.posted_at
+    hasTime: !!post.posted_at,
+    hasPrecisePublicationTime: !!post.published_at
   }))
 };
 '@

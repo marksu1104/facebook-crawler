@@ -5,7 +5,7 @@
   const fields = [
     'group-url', 'keywords', 'excludes', 'match-mode', 'browser',
     'interval-seconds', 'max-checks', 'duration-minutes',
-    'max-notifications-per-check', 'max-posts-per-check',
+    'tracking-mode', 'notification-timezone', 'max-posts-per-check',
     'telegram-token', 'telegram-chat-id', 'remember-telegram-token'
   ];
   const busyPhases = new Set(['opening', 'confirming', 'checking', 'reading', 'sending', 'closing']);
@@ -14,7 +14,7 @@
     awaiting_login: '等待登入', login: '等待登入', ready: '已就緒',
     checking: '讀取貼文中', reading: '讀取貼文中', running: '追蹤中',
     paused: '需要你確認', error: '需要處理', closing: '關閉視窗中',
-    sending: '發送中', stopped: '已停止'
+    sending: '發送中', stopped: '已停止', retrying: '等待重試'
   };
   const notificationLabels = {
     baseline: '起點貼文', pending: '等待通知', sending: '發送中', sent: '已通知',
@@ -76,7 +76,11 @@
   function dateLabel(value) {
     if (!value) return '—';
     const date = typeof value === 'number' ? new Date(value * 1000) : new Date(value);
-    return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-TW', {hour12: false});
+    return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-TW', {
+      timeZone: state.data?.settings?.notification_timezone || 'Asia/Taipei',
+      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hourCycle: 'h23', timeZoneName: 'shortOffset'
+    });
   }
 
   function remaining(value) {
@@ -107,7 +111,8 @@
     $('interval-seconds').value = settings.interval_seconds ?? 120;
     $('max-checks').value = settings.max_checks ?? 3;
     $('duration-minutes').value = settings.duration_minutes ?? 10;
-    $('max-notifications-per-check').value = settings.max_notifications_per_check ?? 3;
+    $('tracking-mode').value = settings.tracking_mode || 'continuous';
+    $('notification-timezone').value = settings.notification_timezone || 'Asia/Taipei';
     $('max-posts-per-check').value = settings.max_posts_per_check ?? 20;
     $('telegram-chat-id').value = settings.telegram_chat_id || '';
     // Tokens are write-only, including when an unexpected API response contains one.
@@ -118,7 +123,9 @@
   function renderSettingsSummary() {
     const seconds = Number($('interval-seconds').value) || 120;
     const interval = seconds % 60 === 0 ? `${seconds / 60} 分鐘` : `${seconds} 秒`;
-    $('run-summary').textContent = `每 ${interval}，最多 ${$('max-checks').value || 3} 次`;
+    const limited = $('tracking-mode').value === 'limited';
+    $('limited-settings').hidden = !limited;
+    $('run-summary').textContent = limited ? `每 ${interval}，最多 ${$('max-checks').value || 3} 次` : `每 ${interval}，持續追蹤`;
     $('rules-summary').textContent = $('match-mode').value === 'all' ? '全部關鍵字' : '任一關鍵字';
     $('draft-status').textContent = state.dirty ? '有未儲存的設定' : '已載入本機設定';
     $('draft-status').classList.toggle('unsaved', state.dirty);
@@ -127,7 +134,9 @@
   function runDescription(settings) {
     const seconds = settings.interval_seconds ?? 120;
     const interval = seconds % 60 === 0 ? `${seconds / 60} 分鐘` : `${seconds} 秒`;
-    return `每 ${interval}檢查一次，最多 ${settings.max_checks ?? 3} 次或 ${settings.duration_minutes ?? 10} 分鐘`;
+    return settings.tracking_mode === 'limited'
+      ? `每 ${interval}檢查一次，最多 ${settings.max_checks ?? 3} 次或 ${settings.duration_minutes ?? 10} 分鐘`
+      : `每 ${interval}檢查一次，持續運行到手動停止`;
   }
 
   function workflow(data, busy) {
@@ -149,6 +158,7 @@
       return {...base, title: '追蹤已暫停，請確認 Facebook 狀態', description: sanitize(status.message || '請在追蹤視窗親自完成登入或驗證，再回來確認。'), label: status.browser_open ? '確認登入／限制已處理' : '重新開啟追蹤視窗', action: status.browser_open ? 'confirm-browser' : 'open-browser'};
     }
     if (status.auto_running) {
+      if (status.phase === 'retrying') return {...base, title: '連線暫時異常，正在等待重試', description: sanitize(status.message), label: '停止追蹤', action: 'stop-auto', note: '未確認送達的通知保留紀錄，可在貼文預覽核對'};
       return {...base, title: '正在幫你留意符合條件的貼文', description: '新偵測的貼文符合條件且有原文連結時，會傳到已設定的 Telegram 聊天。', label: '停止這次追蹤', action: 'stop-auto', note: '可以隨時停止，稍後再開始'};
     }
     if (!String(settings.group_url || '').trim()) {
@@ -171,7 +181,7 @@
     if (!settings.telegram_configured || !String(settings.telegram_chat_id || '').trim()) {
       return {...base, stage: 2, title: '預覽好了，把消息送到手機', description: '展開手機通知設定，連接你自己的 Telegram Bot 與私人聊天。儲存後可以發送一則測試訊息。', label: settings.telegram_configured ? '選擇接收通知的聊天' : '設定 Telegram 通知', action: 'telegram', note: '每則貼文通知會附上可直接開啟的原文連結'};
     }
-    return {...base, stage: 2, title: '準備好了，開始留意新消息', description: `${runDescription(settings)}。到達上限即停止，之後可再次開始。`, label: '開始追蹤', action: 'start-auto', note: '符合條件的首次收錄貼文才會自動通知'};
+    return {...base, stage: 2, title: '準備好了，開始留意新消息', description: `${runDescription(settings)}。每輪新符合貼文會合併通知到手機。`, label: '開始追蹤', action: 'start-auto', note: '每篇包含內容預覽、時間與原文連結'};
   }
 
   function renderWorkflow(data, busy) {
@@ -202,13 +212,13 @@
     const recipient = !!settings.telegram_configured && !!String(settings.telegram_chat_id || '').trim();
     const cooldown = remaining(status.cooldown_until);
     const unavailable = busy || !state.connected;
-    $('phase-badge').textContent = auto && !busy ? '追蹤中' : phaseLabels[status.phase] || '尚未開始';
+    $('phase-badge').textContent = status.phase === 'retrying' ? '等待重試' : auto && !busy ? '追蹤中' : phaseLabels[status.phase] || '尚未開始';
     $('phase-badge').className = 'badge' + (blocked ? ' error' : auto ? ' active' : busy ? ' warning' : '');
     $('status-message').textContent = sanitize(status.message || '請先設定追蹤來源。');
     $('last-checked').textContent = status.last_checked ? dateLabel(status.last_checked) : '尚未讀取';
     $('cooldown').textContent = cooldown ? `尚需約 ${cooldown} 秒` : '目前可讀取';
     $('next-check').textContent = auto && status.next_check_at ? dateLabel(status.next_check_at) : '未排定';
-    $('remaining-checks').textContent = auto ? `${status.remaining_checks ?? 0} 次` : '未開始';
+    $('remaining-checks').textContent = auto ? status.remaining_checks == null ? '持續追蹤' : `${status.remaining_checks} 次` : '未開始';
     $('tracking-stats').hidden = !auto && !status.last_checked;
     $('resolved-group').textContent = status.resolved_group_url || '尚未確認';
     $('baseline-description').textContent = status.baseline_ready
@@ -231,6 +241,7 @@
       button.disabled = unavailable || auto || !recipient || state.dirty;
     });
     fields.forEach(id => { $(id).disabled = unavailable || auto; });
+    ['max-checks', 'duration-minutes'].forEach(id => { $(id).disabled = unavailable || auto || $('tracking-mode').value !== 'limited'; });
     $('remember-telegram-token').disabled = unavailable || auto || settings.telegram_storage_supported !== true;
     $('forget-telegram-token').disabled = unavailable || auto || state.dirty || !(settings.telegram_configured || settings.telegram_token_saved);
     let storageMessage = '勾選並儲存後，Token 會使用目前的 Windows 帳戶加密，重開程式自動載入。';
@@ -253,10 +264,11 @@
     const expanded = state.expanded.has(id);
     const label = notificationLabels[post.notification_status] || '尚未通知';
     const hits = Array.isArray(post.hits) ? post.hits : [];
+    const publication = post.published_at ? dateLabel(post.published_at) : post.posted_at ? `頁面顯示 ${post.posted_at}，精確時間未取得` : '精確發文時間未取得';
     let reason = '未通過關鍵字或排除詞比對';
     if (post.matched) reason = hits.length ? `包含 ${hits.map(word => `「${String(word)}」`).join('、')}` : '符合已儲存的追蹤條件';
     return `<article class="post">
-      <div class="post-heading"><span class="author-avatar" aria-hidden="true">${escapeHTML(Array.from(author)[0])}</span><div class="post-author"><h3>${escapeHTML(author)}</h3><p>${escapeHTML(post.posted_at || '未提供發文時間')}</p></div><span class="badge ${post.notification_status === 'sent' ? 'active' : ''}">${escapeHTML(label)}</span></div>
+      <div class="post-heading"><span class="author-avatar" aria-hidden="true">${escapeHTML(Array.from(author)[0])}</span><div class="post-author"><h3>${escapeHTML(author)}</h3><p>發文 ${escapeHTML(publication)}</p><p>首次偵測 ${escapeHTML(dateLabel(post.first_seen))}</p></div><span class="badge ${post.notification_status === 'sent' ? 'active' : ''}">${escapeHTML(label)}</span></div>
       <p class="post-content${long && !expanded ? ' collapsed' : ''}">${escapeHTML(content)}</p>
       ${long ? `<button type="button" class="text-button expand-post" data-expand-post="${escapeHTML(id)}" aria-expanded="${expanded}">${expanded ? '收合內容' : '展開完整已讀取內容'}</button>` : ''}
       <div class="post-match${post.matched ? '' : ' unmatched'}"><span aria-hidden="true">${post.matched ? '✓' : '−'}</span><span>${post.matched ? '符合條件' : '未符合條件'} · ${escapeHTML(reason)}</span></div>
@@ -342,12 +354,15 @@
 
   function settingsBody() {
     const words = value => [...new Set(value.split(/[,，、\n]+/).map(word => word.trim()).filter(Boolean))];
+    const limited = $('tracking-mode').value === 'limited';
     const body = {
       group_url: $('group-url').value.trim(), keywords: words($('keywords').value),
       excludes: words($('excludes').value), match_mode: $('match-mode').value,
       browser: $('browser').value, interval_seconds: Number($('interval-seconds').value),
-      max_checks: Number($('max-checks').value), duration_minutes: Number($('duration-minutes').value),
-      max_notifications_per_check: Number($('max-notifications-per-check').value),
+      tracking_mode: $('tracking-mode').value,
+      max_checks: limited ? Number($('max-checks').value) : state.data?.settings?.max_checks ?? 3,
+      duration_minutes: limited ? Number($('duration-minutes').value) : state.data?.settings?.duration_minutes ?? 10,
+      notification_timezone: $('notification-timezone').value.trim(),
       max_posts_per_check: Number($('max-posts-per-check').value),
       telegram_chat_id: $('telegram-chat-id').value.trim(),
       remember_telegram_token: $('remember-telegram-token').checked

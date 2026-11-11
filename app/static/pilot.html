@@ -66,13 +66,16 @@
             </div>
           </details>
           <details class="panel settings-details" id="advanced-details">
-            <summary><span class="details-icon" aria-hidden="true">≡</span><span class="details-title">讀取與追蹤設定<span id="run-summary" class="summary-description">每 2 分鐘，最多 3 次</span></span></summary>
+            <summary><span class="details-icon" aria-hidden="true">≡</span><span class="details-title">讀取與追蹤設定<span id="run-summary" class="summary-description">每 2 分鐘，持續追蹤</span></span></summary>
             <div class="details-body">
               <label for="max-posts-per-check">每次最多讀取篇數</label><input id="max-posts-per-check" type="number" value="20" min="1" max="50" required>
               <p class="help">讀取時會嘗試載入更多貼文。這是篇數上限，實際數量取決於社團頁面。</p>
-              <div class="form-row"><div><label for="interval-seconds">間隔秒數</label><input id="interval-seconds" type="number" value="120" min="60" max="3600" required></div><div><label for="max-checks">最多檢查次數</label><input id="max-checks" type="number" value="3" min="1" max="10" required></div></div>
-              <div class="form-row"><div><label for="duration-minutes">最長時間（分）</label><input id="duration-minutes" type="number" value="10" min="1" max="60" required></div><div><label for="max-notifications-per-check">每輪最多自動通知</label><input id="max-notifications-per-check" type="number" value="3" min="1" max="10" required></div></div>
-              <p class="help">到達次數或時間上限即停止，可再次開始。超出通知上限的符合貼文會保留在預覽中，可手動選擇發送。</p>
+              <label for="tracking-mode">追蹤模式</label><select id="tracking-mode"><option value="continuous">持續追蹤，直到手動停止</option><option value="limited">限定次數與時間</option></select>
+              <label for="interval-seconds">檢查間隔（秒）</label><input id="interval-seconds" type="number" value="120" min="60" max="3600" required>
+              <div id="limited-settings" class="form-row" hidden><div><label for="max-checks">最多檢查次數</label><input id="max-checks" type="number" value="3" min="1" max="10" required></div><div><label for="duration-minutes">最長時間（分）</label><input id="duration-minutes" type="number" value="10" min="1" max="60" required></div></div>
+              <p class="help">持續模式適合連跑數天。載入逾時會延後重試，登入或驗證限制則暫停並等待你處理。</p>
+              <label for="notification-timezone">通知與畫面時區</label><input id="notification-timezone" type="text" value="Asia/Taipei" required maxlength="80" placeholder="例如 Asia/Taipei">
+              <p class="help">每輪新符合貼文會合併通知，附預覽與網址；超過訊息長度時自動分段。發文時間與首次偵測時間會分別標示。</p>
               <label for="browser">追蹤瀏覽器</label><select id="browser"><option value="auto">自動選擇</option><option value="edge">Microsoft Edge</option><option value="chrome">Google Chrome</option></select>
               <p class="safety-note">頻率不代表帳號安全保證。遇到登入驗證或存取限制時，追蹤會暫停，等待你親自處理並確認。</p>
             </div>

@@ -25,10 +25,36 @@ function scan(scripts,expected=group,functionName='scanPostMetadata',responsePay
 const loaded=(scripts,expected=group,responses=[])=>scan(scripts,expected,'extractLoadedPostMetadata',responses);
 const feedResponse=records=>JSON.stringify({data:{node:{__typename:'Group',id:'123456',group_feed:{edges:records.map(node=>({node}))}}}});
 
+test('publication time comes from the same story identity and survives duplicate records',()=>{
+  const timestamp=1700000000;
+  const posts=loaded([{content:[record,{...record,creation_time:timestamp},record]}]);
+  assert.equal(posts[0].published_at,'2023-11-14T22:13:20.000Z');
+  const nested={...record,comet_sections:{timestamp:{story:{id:record.id,creation_time:timestamp}}}};
+  assert.equal(loaded([{content:nested}])[0].published_at,'2023-11-14T22:13:20.000Z');
+  nested.comet_sections.timestamp.story.id='another-story';
+  assert.equal(loaded([{content:nested}])[0].published_at,'');
+});
+
+test('invalid or conflicting publication timestamps remain explicitly unavailable',()=>{
+  for (const value of [true,null,'3分鐘前',0,Infinity,'NaN']) {
+    assert.equal(loaded([{content:{...record,creation_time:value}}])[0].published_at,'');
+  }
+  const posts=loaded([{content:[{...record,creation_time:1700000000},{...record,creation_time:1700000100},{...record,creation_time:1700000000}]}]);
+  assert.equal(posts[0].published_at,'');
+});
+
+test('separate timestamp fragments require the exact verified global Story ID',()=>{
+  const time={id:record.id,__typename:'Story',creation_time:1700000000};
+  assert.equal(loaded([{content:[record,time]}])[0].published_at,'2023-11-14T22:13:20.000Z');
+  assert.equal(loaded([{content:[record,{...time,id:'story:other'}]}])[0].published_at,'');
+  assert.equal(loaded([{content:[record,{...time,__typename:'Comment'}]}])[0].published_at,'');
+  assert.equal(loaded([{content:[record,time,{...time,creation_time:1700000100}]}])[0].published_at,'');
+});
+
 test('scanner finds strict nested same-group records without executing script content',()=>{
   const result=scan([{content:{wrapper:[{payload:record}]}},{type:'text/javascript',content:'window.fetch("https://example.test")'}]);
   assert.equal(result.limit_exceeded,false);
-  assert.deepEqual(result.records,[{story_id:'story:111',post_id:'111',group_id:'123456',text:record.message.text,actors:['作者'],url:group+'/posts/111/'}]);
+  assert.deepEqual(result.records,[{story_id:'story:111',post_id:'111',group_id:'123456',text:record.message.text,actors:['作者'],url:group+'/posts/111/',published_at:''}]);
 });
 
 test('malformed JSON scripts are skipped without discarding valid scripts',()=>{
@@ -96,7 +122,7 @@ test('depth overflow returns no partial metadata',()=>{
 test('loaded metadata returns a complete post from the same validated source object',()=>{
   const content='預載的完整貼文\n保留換行、網址與原始內容，沒有與畫面上的其他貼文猜測配對。';
   const posts=loaded([{content:{preloadedStory:{...record,message:{text:content},actors:[{name:'第一位作者'},{name:'第二位作者'}]}}}]);
-  assert.deepEqual(posts,[{author:'第一位作者、第二位作者',content,posted_at:'',url:group+'/posts/111/',post_id:'111'}]);
+  assert.deepEqual(posts,[{author:'第一位作者、第二位作者',content,posted_at:'',url:group+'/posts/111/',post_id:'111',published_at:''}]);
 });
 
 test('duplicate records collapse by stable numeric post ID',()=>{

@@ -9,6 +9,12 @@ const group = 'https://www.facebook.com/groups/123456';
 const link = (id, text='時間', extra='') => `<a href="${group}/posts/${id}/?tracking=ignored" ${extra}>${text}</a>`;
 const message = text => `<div data-ad-preview="message">${text}</div>`;
 
+test('a timestamp is taken only from the verified post header link',()=>{
+  const posts=extract(`<div role="article"><h3><a href="/a">作者</a></h3>${link('111','<time datetime="2026-11-11T11:00:00Z">3 分鐘前</time>')}${message('<time datetime="2000-01-01T00:00:00Z">正文中的日期</time>')}</div>`);
+  assert.equal(posts[0].published_at,'2026-11-11T11:00:00Z');
+  assert.equal(posts[0].posted_at,'3 分鐘前');
+});
+
 test('a comment-targeting header URL is not accepted as a post permalink',()=>{
   const posts=extract(`<div role="article"><h3><a href="/a">作者</a></h3><a href="${group}/posts/111/?comment_id=77">留言時間</a>${message('貼文內容')}</div>`);
   assert.equal(posts.length,1);

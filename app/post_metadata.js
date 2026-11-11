@@ -12,6 +12,26 @@ function scanPostMetadata(expectedGroupURL, responsePayloads = []) {
   const groupId = expectedMatch[1];
   let totalBytes = 0, objectCount = 0;
   const records = [];
+  const storyTimes = new Map();
+  const conflictingTimes = new Set();
+
+  function publicationTime(raw) {
+    const numeric = typeof raw === 'number' || (typeof raw === 'string' && /^\d+(?:\.\d+)?$/.test(raw)) ? Number(raw) : NaN;
+    const date = new Date(numeric >= 1000000000000 ? numeric : numeric * 1000);
+    return Number.isFinite(numeric) && date.getUTCFullYear() >= 2004 && date.getUTCFullYear() <= 2100 ? date.toISOString() : '';
+  }
+
+  function inspectTime(value) {
+    if (!Object.prototype.hasOwnProperty.call(value, 'creation_time')) return;
+    if (Array.isArray(value) || typeof value.id !== 'string' || !value.id || value.id.length > 2048) return;
+    if (value.__typename && value.__typename !== 'Story') return;
+    const time = publicationTime(value.creation_time);
+    if (!time || conflictingTimes.has(value.id)) return;
+    if (storyTimes.has(value.id) && storyTimes.get(value.id) !== time) {
+      storyTimes.delete(value.id);
+      conflictingTimes.add(value.id);
+    } else storyTimes.set(value.id, time);
+  }
 
   function withinByteBudget(text) {
     if (text.length > MAX_BYTES - totalBytes) return false;
@@ -53,7 +73,11 @@ function scanPostMetadata(expectedGroupURL, responsePayloads = []) {
       if (url) break;
     }
     if (!url) return;
-    records.push({story_id:typeof value.id === 'string' ? value.id : '', post_id:value.post_id, group_id:groupId, text:value.message.text, actors, url});
+    const timestampStory = value.comet_sections?.timestamp?.story;
+    const sameTimestampStory = timestampStory && (timestampStory.post_id === value.post_id || (typeof value.id === 'string' && timestampStory.id === value.id));
+    const rawTime = value.creation_time ?? (sameTimestampStory ? timestampStory.creation_time : null);
+    const published = publicationTime(rawTime);
+    records.push({story_id:typeof value.id === 'string' ? value.id : '', post_id:value.post_id, group_id:groupId, text:value.message.text, actors, url, published_at:published});
   }
 
   const sources = [...document.querySelectorAll('script[type="application/json"]')]
@@ -94,6 +118,7 @@ function scanPostMetadata(expectedGroupURL, responsePayloads = []) {
           if (!frame.value || typeof frame.value !== 'object') { stack.pop(); continue; }
           objectCount++;
           if (objectCount > MAX_OBJECTS) return {records:[], limit_exceeded:true, limit_reason:'objects'};
+          inspectTime(frame.value);
           if (frame.inFeed) inspect(frame.value);
           frame.entered = true;
           if (!Array.isArray(frame.value)) frame.keys = Object.keys(frame.value);
@@ -111,6 +136,15 @@ function scanPostMetadata(expectedGroupURL, responsePayloads = []) {
       }
     }
   }
+  for (const record of records) {
+    // Timestamp and body can be separate GraphQL fragments of one global Story ID.
+    // Post text, actors, group and URL still belong to the original verified record.
+    if (conflictingTimes.has(record.story_id)) {
+      record.published_at = '';
+      record.timestamp_conflict = true;
+    }
+    else record.published_at = storyTimes.get(record.story_id) || record.published_at;
+  }
   return {records, limit_exceeded:false};
 }
 
@@ -119,9 +153,11 @@ function extractLoadedPostMetadata(expectedGroupURL, responsePayloads = []) {
   if (scanned.limit_exceeded) return [];
   const posts = new Map();
   const conflicts = new Set();
+  const timeConflicts = new Set();
   for (const record of scanned.records) {
     if (conflicts.has(record.post_id)) continue;
     const author = record.actors.join('、');
+    if (record.timestamp_conflict) timeConflicts.add(record.post_id);
     const previous = posts.get(record.post_id);
     if (previous && (previous.content !== record.text || previous.url !== record.url || previous.author !== author)) {
       posts.delete(record.post_id);
@@ -129,7 +165,18 @@ function extractLoadedPostMetadata(expectedGroupURL, responsePayloads = []) {
       continue;
     }
     if (!previous) {
-      posts.set(record.post_id, {author, content:record.text, posted_at:'', url:record.url, post_id:record.post_id});
+      posts.set(record.post_id, {author, content:record.text, posted_at:'', url:record.url, post_id:record.post_id, published_at:record.published_at});
+    } else if (!timeConflicts.has(record.post_id) && record.published_at) {
+      if (previous.published_at && previous.published_at !== record.published_at) {
+        previous.published_at = '';
+        timeConflicts.add(record.post_id);
+      } else previous.published_at = record.published_at;
+    }
+  }
+  for (const post of posts.values()) {
+    if (timeConflicts.has(post.post_id)) {
+      post.published_at = '';
+      post.timestamp_conflict = true;
     }
   }
   return [...posts.values()];

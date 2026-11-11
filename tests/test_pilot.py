@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.browser import canonical_post_url
 from app.pilot import Cooldown, Pilot, PilotBusy, PilotDatabase, PilotSettings, create_pilot_app
-from app.pilot_browser import NeedsUserAction, PilotBrowser, PilotBrowserError, check_snapshot, pilot_group_url, post_belongs_to_group
+from app.pilot_browser import NeedsUserAction, PilotBrowser, PilotBrowserError, PilotTransientError, check_snapshot, pilot_group_url, post_belongs_to_group
 from app.telegram import TelegramClient, TelegramError, TelegramRateLimited
 from app.token_store import TokenStorageError
 
@@ -297,7 +297,7 @@ def test_baseline_does_not_push_and_manual_checks_share_refresh_cooldown(session
     until(lambda: not pilot.pending)
     assert browser.calls[-1] == ("collect", True)
     assert len(telegram.calls) == 1
-    assert telegram.calls[0]["link"] == GROUP + "/posts/2/"
+    assert GROUP + "/posts/2/" in telegram.calls[0]["text"]
     assert client.get("/api/state").json()["posts"][0]["notification_status"] == "sent"
 
 
@@ -351,7 +351,7 @@ def test_restriction_latches_and_queued_start_or_manual_buttons_cannot_resume(se
 
 
 def test_finite_automatic_checks_stop_at_count(session):
-    ready(session, max_checks=1)
+    ready(session, tracking_mode="limited", max_checks=1)
     client, pilot, browser, telegram, clock, path = session
     clock.advance()
     assert client.post("/api/auto/start").status_code == 200
@@ -360,6 +360,155 @@ def test_finite_automatic_checks_stop_at_count(session):
     clock.advance(600)
     time.sleep(0.3)
     assert browser.calls.count(("collect", True)) == 1
+
+
+def test_continuous_mode_keeps_running_across_multiple_days_until_stopped(session):
+    ready(session)
+    client, pilot, browser, telegram, clock, path = session
+    clock.advance()
+    assert client.post("/api/auto/start").status_code == 200
+    until(lambda: browser.calls.count(("collect", True)) == 1 and not pilot.pending)
+    for number in range(2, 6):
+        clock.advance(3 * 24 * 3600)
+        until(lambda: browser.calls.count(("collect", True)) == number and not pilot.pending)
+        assert pilot.auto and not pilot.latched
+        assert pilot.state()["status"]["remaining_checks"] is None
+    client.post("/api/auto/stop")
+    clock.advance(7 * 24 * 3600)
+    time.sleep(0.3)
+    assert browser.calls.count(("collect", True)) == 5 and not pilot.auto
+
+
+def test_continuous_mode_retries_a_transient_page_timeout_with_backoff(session):
+    ready(session)
+    client, pilot, browser, telegram, clock, path = session
+    browser.error = PilotTransientError("社團載入逾時。")
+    clock.advance()
+    client.post("/api/auto/start")
+    until(lambda: pilot.phase == "retrying" and not pilot.pending)
+    assert pilot.auto and not pilot.latched
+    retry_at = pilot.next_check
+    pilot._schedule()
+    assert not pilot.pending and pilot.next_check == retry_at
+    browser.error = None
+    clock.advance(120)
+    until(lambda: pilot.phase == "ready" and not pilot.pending)
+    assert pilot.auto and pilot.consecutive_failures == 0
+
+
+def test_rate_limited_digest_waits_then_sends_pending_posts_once(session):
+    ready(session)
+    client, pilot, browser, telegram, clock, path = session
+    browser.posts.extend([source("2"), source("3")])
+    telegram.error = TelegramRateLimited(300)
+    clock.advance()
+    client.post("/api/auto/start")
+    until(lambda: pilot.phase == "retrying" and not pilot.pending)
+    assert pilot.auto and not pilot.latched and not telegram.calls
+    assert len(pilot.db.pending_notifications(GROUP)) == 2
+    assert pilot.next_check >= clock() + 300
+    telegram.error = None
+    clock.advance(301)
+    until(lambda: len(telegram.calls) == 1 and not pilot.pending)
+    assert len(pilot.db.pending_notifications(GROUP)) == 0
+    clock.advance()
+    until(lambda: not pilot.pending and browser.calls.count(("collect", True)) >= 3)
+    assert len(telegram.calls) == 1
+
+
+def test_partial_digest_failure_preserves_unsent_posts_without_replaying_sent_or_unknown_batches(session):
+    ready(session, max_posts_per_check=50)
+    client, pilot, browser, telegram, clock, path = session
+    browser.posts.extend(source(str(index), "🏐" * 500) for index in range(2, 31))
+    attempts = []
+
+    def interrupt_second_message():
+        attempts.append(True)
+        clock.advance(2)
+        if len(attempts) == 2:
+            telegram.error = TelegramError("連線逾時")
+
+    telegram.before_send = interrupt_second_message
+    clock.advance()
+    client.post("/api/auto/start")
+    until(lambda: pilot.phase == "retrying" and not pilot.pending)
+    statuses = {post["post_id"]: post["notification_status"] for post in pilot.db.posts(GROUP)}
+    assert {"sent", "unknown", "pending"}.issubset(set(statuses.values()))
+    unknown_links = [GROUP + f"/posts/{identity}/" for identity, status in statuses.items() if status == "unknown"]
+    first_text = telegram.calls[0]["text"]
+    telegram.error = None
+    telegram.before_send = lambda: clock.advance(2)
+    clock.advance(120)
+    until(lambda: not pilot.pending and not pilot.db.pending_notifications(GROUP))
+    remaining_text = "\n".join(call["text"] for call in telegram.calls[1:])
+    assert all(link not in remaining_text for link in unknown_links)
+    sent_links = [GROUP + f"/posts/{identity}/" for identity, status in statuses.items() if status == "sent"]
+    assert all(link in first_text and link not in remaining_text for link in sent_links)
+
+
+def test_restart_restores_baseline_and_sends_new_posts_since_previous_run(session):
+    ready(session)
+    client, pilot, browser, telegram, clock, path = session
+    pilot.close()
+    new_browser = FakeBrowser()
+    new_browser.posts = [source(), source("2")]
+    app = create_pilot_app(path, pilot_factory=lambda directory: Pilot(directory, new_browser, telegram.client, clock))
+    with TestClient(app, headers=HEADERS) as restarted_client:
+        restarted = app.state.pilot
+        restarted_client.post("/api/browser/open")
+        until(lambda: not restarted.pending)
+        restarted_client.post("/api/browser/confirm")
+        until(lambda: not restarted.pending)
+        assert restarted.baseline
+        assert not telegram.calls and not restarted.auto
+        clock.advance()
+        restarted_client.post("/api/check")
+        until(lambda: not restarted.pending)
+        assert len(telegram.calls) == 1 and GROUP + "/posts/2/" in telegram.calls[0]["text"]
+
+
+def test_changed_recipient_holds_queued_notifications(session):
+    ready(session)
+    client, pilot, browser, telegram, clock, path = session
+    queued, _ = pilot.db.observe(GROUP, source("2"), pilot.settings, False)
+    response = client.post("/api/settings", json={"group_url": GROUP, "telegram_chat_id": "87654321"})
+    assert response.status_code == 200
+    assert pilot.db.post(queued["id"])["notification_status"] == "held"
+    assert not pilot.db.pending_notifications(GROUP)
+
+
+def test_old_database_adds_publication_time_without_losing_detection_or_delivery_state(tmp_path):
+    path = tmp_path / "pilot.sqlite3"
+    database = PilotDatabase(path)
+    settings = PilotSettings(group_url=GROUP).model_dump()
+    post, _ = database.observe(GROUP, source(), settings, True)
+    with database.connect() as db:
+        db.execute("ALTER TABLE posts DROP COLUMN published_at")
+    migrated = PilotDatabase(path)
+    restored = migrated.post(post["id"])
+    assert restored["first_seen"] == post["first_seen"]
+    assert restored["published_at"] == "" and restored["notification_status"] == "baseline"
+    migrated.observe(GROUP, {**source(), "published_at": 1700000000}, settings, False)
+    assert migrated.post(post["id"])["published_at"] == "2023-11-14T22:13:20+00:00"
+    assert migrated.post(post["id"])["notification_status"] == "baseline"
+
+
+def test_conflicting_publication_time_clears_previously_saved_precision(session):
+    client, pilot, browser, telegram, clock, path = session
+    settings = PilotSettings(group_url=GROUP).model_dump()
+    post, _ = pilot.db.observe(GROUP, {**source(), "published_at": 1700000000}, settings, True)
+    assert pilot.db.post(post["id"])["published_at"]
+    pilot.db.observe(GROUP, {**source(), "timestamp_conflict": True}, settings, False)
+    assert pilot.db.post(post["id"])["published_at"] == ""
+
+
+def test_pending_post_that_no_longer_matches_is_not_sent(session):
+    client, pilot, browser, telegram, clock, path = session
+    settings = PilotSettings(group_url=GROUP, keywords=["臨打"]).model_dump()
+    post, _ = pilot.db.observe(GROUP, source(), settings, False)
+    pilot.db.observe(GROUP, source(content="活動取消"), settings, False)
+    assert pilot.db.post(post["id"])["notification_status"] == "not_matched"
+    assert not pilot.db.pending_notifications(GROUP)
 
 
 def test_expired_queued_automatic_check_never_starts(tmp_path):
@@ -417,15 +566,17 @@ def test_network_failure_marks_delivery_unknown_pauses_and_never_retries(session
     assert telegram.calls == []
 
 
-def test_per_check_notification_limit_holds_extra_candidates(session):
-    ready(session, max_notifications_per_check=1)
+def test_new_matching_posts_are_combined_and_all_marked_sent(session):
+    ready(session)
     client, pilot, browser, telegram, clock, path = session
     browser.posts.extend([source("2"), source("3")])
     clock.advance()
     client.post("/api/check")
     until(lambda: not pilot.pending)
     assert len(telegram.calls) == 1
-    assert sorted(p["notification_status"] for p in pilot.db.posts(GROUP)) == ["baseline", "held", "sent"]
+    assert sorted(p["notification_status"] for p in pilot.db.posts(GROUP)) == ["baseline", "sent", "sent"]
+    assert all(GROUP + f"/posts/{number}/" in telegram.calls[0]["text"] for number in ("2", "3"))
+    assert "首次偵測" in telegram.calls[0]["text"] and "通知時間" in telegram.calls[0]["text"]
 
 
 def test_delivery_state_survives_restart_without_automatic_replays(tmp_path):
@@ -436,7 +587,7 @@ def test_delivery_state_survives_restart_without_automatic_replays(tmp_path):
         db.delivery(post["id"], status)
     restarted = PilotDatabase(tmp_path / "pilot.sqlite3")
     statuses = {post["post_id"]: post["notification_status"] for post in restarted.posts(GROUP)}
-    assert statuses == {"1": "sent", "2": "unknown", "3": "held"}
+    assert statuses == {"1": "sent", "2": "unknown", "3": "pending"}
     browser, telegram = FakeBrowser(), Transport()
     pilot = Pilot(tmp_path, browser, telegram.client)
     assert not pilot.token and not pilot.auto and not pilot.baseline
@@ -604,7 +755,7 @@ def test_same_verified_post_id_can_use_its_loaded_full_record_without_mixing_fie
     browser.driver = driver
     result = browser.collect(GROUP, threading.Event())
     assert len(result) == 1 and result[0]["content"].endswith("這是完整內容。")
-    assert result[0]["posted_at"] == ""
+    assert result[0]["posted_at"] == "3分鐘前"
 
 
 class ImmediateCancel(threading.Event):

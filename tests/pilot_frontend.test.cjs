@@ -72,7 +72,8 @@ test('initial pilot state loads settings without opening a browser or sending an
     assert.equal(app.document.getElementById('group-url').value,defaultSettings.group_url);
     assert.equal(app.document.getElementById('interval-seconds').value,'120');
     assert.equal(app.document.getElementById('interval-seconds').max,'3600');
-    assert.equal(app.document.getElementById('max-notifications-per-check').value,'3');
+    assert.equal(app.document.getElementById('tracking-mode').value,'continuous');
+    assert.equal(app.document.getElementById('notification-timezone').value,'Asia/Taipei');
     assert.equal(app.document.getElementById('telegram-token').value,'');
     assert.equal(app.document.getElementById('start-auto').disabled,true);
     assert.equal(app.document.getElementById('test-telegram').disabled,true);
@@ -82,6 +83,48 @@ test('initial pilot state loads settings without opening a browser or sending an
   } finally { await app.close(); }
 });
 
+test('continuous tracking and limited tracking controls remain usable with old settings',async()=>{
+  const app=await setup();
+  try {
+    assert.equal(app.document.getElementById('limited-settings').hidden,true);
+    assert.equal(app.document.getElementById('max-checks').disabled,true);
+    assert.match(app.document.getElementById('run-summary').textContent,/持續追蹤/);
+    edit(app,'tracking-mode','limited');
+    assert.equal(app.document.getElementById('limited-settings').hidden,false);
+    assert.equal(app.document.getElementById('max-checks').disabled,false);
+    edit(app,'max-checks','2');
+    submit(app);
+    await until(()=>app.calls.some(call=>call.path==='/api/settings'));
+    const call=app.calls.find(call=>call.path==='/api/settings');
+    assert.equal(call.body.tracking_mode,'limited');
+    assert.equal(call.body.max_checks,2);
+    assert.equal(call.body.notification_timezone,'Asia/Taipei');
+    assert.deepEqual(app.errors,[]);
+  } finally {await app.close();}
+});
+
+test('publication and detection times are displayed separately in the selected timezone',async()=>{
+  const app=await setup({posts:[{...samplePost,published_at:'2026-11-11T11:00:00Z',first_seen:'2026-11-11T11:06:07Z'}]});
+  try {
+    const text=app.document.querySelector('.post-author').textContent;
+    assert.match(text,/19:00:00/);
+    assert.match(text,/首次偵測.*19:06:07/);
+    assert.match(text,/GMT\+8/);
+    assert.deepEqual(app.errors,[]);
+  } finally {await app.close();}
+});
+
+test('retrying a continuous run still offers a stop action and shows the next check',async()=>{
+  const app=await setup({settings:{tracking_mode:'continuous'},status:{phase:'retrying',auto_running:true,remaining_checks:null,next_check_at:Date.now()/1000+120,message:'連線逾時，稍後再試'}});
+  try {
+    assert.equal(app.document.getElementById('phase-badge').textContent,'等待重試');
+    assert.equal(app.document.getElementById('remaining-checks').textContent,'持續追蹤');
+    assert.equal(app.document.getElementById('next-action').dataset.action,'stop-auto');
+    assert.equal(app.document.getElementById('next-action').disabled,false);
+    assert.deepEqual(app.errors,[]);
+  } finally {await app.close();}
+});
+
 test('settings submit parses generic rules and sends token only on explicit save',async()=>{
   const app=await setup();
   try {
@@ -89,7 +132,7 @@ test('settings submit parses generic rules and sends token only on explicit save
     edit(app,'excludes','已滿，取消');
     edit(app,'telegram-token','123456:private_token_value');
     edit(app,'telegram-chat-id','1001');
-    edit(app,'max-notifications-per-check','2');
+    edit(app,'notification-timezone','UTC');
     assert.equal(app.calls.filter(call=>call.method!=='GET').length,0);
     assert.equal(app.document.getElementById('open-browser').disabled,true);
     submit(app);
@@ -98,7 +141,8 @@ test('settings submit parses generic rules and sends token only on explicit save
     assert.deepEqual(call.body.keywords,['臨打','台北','週六']);
     assert.deepEqual(call.body.excludes,['已滿','取消']);
     assert.equal(call.body.interval_seconds,120);
-    assert.equal(call.body.max_notifications_per_check,2);
+    assert.equal(call.body.notification_timezone,'UTC');
+    assert.equal(call.body.tracking_mode,'continuous');
     assert.equal(call.body.telegram_token,'123456:private_token_value');
     assert.equal(call.body.remember_telegram_token,true);
     assert.equal(call.headers['X-App-Request'],'1');

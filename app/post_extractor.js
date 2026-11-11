@@ -127,10 +127,12 @@ for (const body of stories) {
   }
   const boundary = found?.boundary || safeBoundary;
   const anchor = found?.link.anchor;
+  const timestampElement = anchor?.querySelector('time[datetime], abbr[data-utime], [data-utime]');
   results.push({
     author:boundary ? authorFrom(boundary, body) : '',
     content:renderedText(body),
     posted_at:anchor ? (anchor.getAttribute('aria-label') || anchor.getAttribute('title') || renderedText(anchor)) : '',
+    published_at:timestampElement?.getAttribute('datetime') || timestampElement?.getAttribute('data-utime') || anchor?.getAttribute('data-utime') || '',
     url:found?.link.post.url || ''
   });
 }
