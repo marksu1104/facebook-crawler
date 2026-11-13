@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.browser import canonical_post_url
+from app.models import match_keywords
 from app.pilot import Cooldown, Pilot, PilotBusy, PilotDatabase, PilotSettings, create_pilot_app
 from app.pilot_browser import NeedsUserAction, PilotBrowser, PilotBrowserError, PilotTransientError, check_snapshot, pilot_group_url, post_belongs_to_group
 from app.telegram import TelegramClient, TelegramError, TelegramRateLimited
@@ -938,6 +939,91 @@ def test_rule_changes_recompute_saved_results_without_another_facebook_read(sess
     assert post["notification_status"] == "baseline"
     assert browser.calls == before_calls and telegram.calls == []
     assert not pilot.baseline
+
+
+@pytest.mark.parametrize("author,excluded,expected", [
+    ("王小明", ["王小明"], False),
+    ("王小明二", ["王小明"], True),
+    ("另一位作者", ["王小明"], True),
+    ("  JOHN   DOE ", ["John Doe"], False),
+    ("王小明、另一位作者", ["另一位作者"], False),
+    ("Smith, John", ["Smith, John"], False),
+    ("", [""], True),
+])
+def test_author_exclusions_use_full_names_without_treating_body_mentions_as_authors(author, excluded, expected):
+    settings = {"keywords": ["臨打"], "excludes": [], "match_mode": "any", "excluded_authors": excluded}
+    matched, hits = match_keywords("臨打，內文提到了王小明", settings, author)
+    assert matched is expected
+    assert hits == (["臨打"] if expected else [])
+
+
+def test_legacy_settings_keep_the_baseline_when_no_authors_are_excluded(tmp_path):
+    database = PilotDatabase(tmp_path / "pilot.sqlite3")
+    settings = PilotSettings(group_url=GROUP).model_dump(exclude={"telegram_token", "excluded_authors"})
+    old_scope = json.dumps({key: settings[key] for key in ("keywords", "excludes", "match_mode", "max_posts_per_check")}, sort_keys=True)
+    database.save_settings(settings)
+    with database.connect() as db:
+        db.execute("INSERT INTO baselines VALUES(?,?,?)", (GROUP, old_scope, "2026-11-01T00:00:00Z"))
+    restored = database.load_settings()
+    assert restored["excluded_authors"] == []
+    assert database.has_baseline(GROUP, restored)
+
+
+def test_author_list_normalizes_whitespace_and_case_duplicates():
+    settings = PilotSettings(excluded_authors=[" 王小明 ", "王小明", " JOHN  DOE ", "john doe", "", "Smith, John"])
+    assert settings.excluded_authors == ["王小明", "JOHN DOE", "Smith, John"]
+    with pytest.raises(ValueError):
+        PilotSettings(excluded_authors=["x" * 121])
+
+
+def test_excluded_authors_are_filtered_from_normal_merged_notifications(session):
+    ready(session, keywords=["臨打"], excluded_authors=["排除同學"])
+    client, pilot, browser, telegram, clock, path = session
+    browser.posts.extend([
+        {**source("2"), "author": "排除同學"},
+        {**source("3", "臨打，內文提及排除同學"), "author": "其他同學"},
+        {**source("4"), "author": "排除同學二"},
+    ])
+    clock.advance()
+    assert client.post("/api/check").status_code == 202
+    until(lambda: not pilot.pending)
+    assert len(telegram.calls) == 1
+    assert GROUP + "/posts/2/" not in telegram.calls[0]["text"]
+    assert all(GROUP + f"/posts/{identity}/" in telegram.calls[0]["text"] for identity in ("3", "4"))
+    blocked = next(post for post in client.get("/api/state").json()["posts"] if post["post_id"] == "2")
+    assert not blocked["matched"] and blocked["author_excluded"]
+    assert blocked["notification_status"] == "not_matched"
+
+
+def test_author_rule_changes_reclassify_existing_and_queued_posts_without_sending_old_posts(session):
+    ready(session)
+    client, pilot, browser, telegram, clock, path = session
+    before = list(browser.calls)
+    queued, _ = pilot.db.observe(GROUP, source("2"), pilot.settings, False)
+    response = client.post("/api/settings", json={**pilot.settings, "excluded_authors": ["測試同學"]})
+    assert response.status_code == 200
+    assert all(not post["matched"] and post["author_excluded"] for post in response.json()["posts"])
+    assert pilot.db.post(queued["id"])["notification_status"] == "held"
+    assert not pilot.db.pending_notifications(GROUP) and not pilot.baseline
+    assert browser.calls == before and telegram.calls == []
+    response = client.post("/api/settings", json={**pilot.settings, "excluded_authors": []})
+    assert response.status_code == 200
+    assert all(post["matched"] and not post["author_excluded"] for post in response.json()["posts"])
+    assert telegram.calls == []
+    assert Pilot(path, FakeBrowser(), telegram.client, clock).settings["excluded_authors"] == []
+
+
+def test_author_metadata_can_be_completed_later_and_is_retained_when_next_read_omits_it(tmp_path):
+    database = PilotDatabase(tmp_path / "pilot.sqlite3")
+    settings = PilotSettings(group_url=GROUP, excluded_authors=["測試同學"]).model_dump()
+    post, _ = database.observe(GROUP, {**source(), "author": ""}, settings, True)
+    assert post["author"] == ""
+    updated, _ = database.observe(GROUP, source(), settings, False)
+    assert updated["author"] == "測試同學" and not updated["matched"]
+    retained, _ = database.observe(GROUP, {**source(), "author": ""}, settings, False)
+    assert retained["author"] == "測試同學" and not retained["matched"]
+    database.reclassify(GROUP, settings)
+    assert not database.post(post["id"])["matched"]
 
 
 def test_document_cache_supports_rereading_rules_and_resets_with_the_document(tmp_path):

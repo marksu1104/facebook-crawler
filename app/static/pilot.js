@@ -3,7 +3,7 @@
 (() => {
   const $ = id => document.getElementById(id);
   const fields = [
-    'group-url', 'keywords', 'excludes', 'match-mode', 'browser',
+    'group-url', 'keywords', 'excludes', 'excluded-authors', 'match-mode', 'browser',
     'interval-seconds', 'max-checks', 'duration-minutes',
     'tracking-mode', 'notification-timezone', 'max-posts-per-check',
     'telegram-token', 'telegram-chat-id', 'remember-telegram-token'
@@ -106,6 +106,7 @@
     $('group-url').value = settings.group_url || '';
     $('keywords').value = (settings.keywords || []).join('、');
     $('excludes').value = (settings.excludes || []).join('、');
+    $('excluded-authors').value = (settings.excluded_authors || []).join('\n');
     $('match-mode').value = settings.match_mode || 'any';
     $('browser').value = settings.browser || 'auto';
     $('interval-seconds').value = settings.interval_seconds ?? 120;
@@ -265,7 +266,7 @@
     const label = notificationLabels[post.notification_status] || '尚未通知';
     const hits = Array.isArray(post.hits) ? post.hits : [];
     const publication = post.published_at ? dateLabel(post.published_at) : post.posted_at ? `頁面顯示 ${post.posted_at}，精確時間未取得` : '精確發文時間未取得';
-    let reason = '未通過關鍵字或排除詞比對';
+    let reason = post.author_excluded ? '已排除這位發文者' : '未通過關鍵字或排除詞比對';
     if (post.matched) reason = hits.length ? `包含 ${hits.map(word => `「${String(word)}」`).join('、')}` : '符合已儲存的追蹤條件';
     return `<article class="post">
       <div class="post-heading"><span class="author-avatar" aria-hidden="true">${escapeHTML(Array.from(author)[0])}</span><div class="post-author"><h3>${escapeHTML(author)}</h3><p>發文 ${escapeHTML(publication)}</p><p>首次偵測 ${escapeHTML(dateLabel(post.first_seen))}</p></div><span class="badge ${post.notification_status === 'sent' ? 'active' : ''}">${escapeHTML(label)}</span></div>
@@ -358,6 +359,7 @@
     const body = {
       group_url: $('group-url').value.trim(), keywords: words($('keywords').value),
       excludes: words($('excludes').value), match_mode: $('match-mode').value,
+      excluded_authors: [...new Set($('excluded-authors').value.split(/\r?\n/).map(name => name.trim()).filter(Boolean))],
       browser: $('browser').value, interval_seconds: Number($('interval-seconds').value),
       tracking_mode: $('tracking-mode').value,
       max_checks: limited ? Number($('max-checks').value) : state.data?.settings?.max_checks ?? 3,

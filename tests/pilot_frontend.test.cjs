@@ -130,6 +130,7 @@ test('settings submit parses generic rules and sends token only on explicit save
   try {
     edit(app,'keywords','臨打、台北,週六\n臨打');
     edit(app,'excludes','已滿，取消');
+    edit(app,'excluded-authors','排除同學\nSmith, John\n排除同學');
     edit(app,'telegram-token','123456:private_token_value');
     edit(app,'telegram-chat-id','1001');
     edit(app,'notification-timezone','UTC');
@@ -140,6 +141,7 @@ test('settings submit parses generic rules and sends token only on explicit save
     const call=app.calls.find(call=>call.path==='/api/settings');
     assert.deepEqual(call.body.keywords,['臨打','台北','週六']);
     assert.deepEqual(call.body.excludes,['已滿','取消']);
+    assert.deepEqual(call.body.excluded_authors,['排除同學','Smith, John']);
     assert.equal(call.body.interval_seconds,120);
     assert.equal(call.body.notification_timezone,'UTC');
     assert.equal(call.body.tracking_mode,'continuous');
@@ -155,6 +157,23 @@ test('settings submit parses generic rules and sends token only on explicit save
     assert.equal(Object.hasOwn(app.calls.filter(item=>item.path==='/api/settings')[1].body,'telegram_token'),false);
     assert.deepEqual(app.errors,[]);
   } finally { await app.close(); }
+});
+
+test('author exclusions load independently from content words and explain excluded posts',async()=>{
+  const app=await setup({settings:{excluded_authors:['排除同學','Smith, John']},posts:[{...samplePost,author:'排除同學',matched:false,hits:[],author_excluded:true}]});
+  try {
+    assert.equal(app.document.getElementById('excluded-authors').value,'排除同學\nSmith, John');
+    assert.equal(app.document.getElementById('excludes').value,'');
+    assert.match(app.document.querySelector('.post-match').textContent,/已排除這位發文者/);
+    edit(app,'excluded-authors','尚未儲存的作者');
+    app.window.poll();
+    await new Promise(resolve=>setTimeout(resolve,10));
+    assert.equal(app.document.getElementById('excluded-authors').value,'尚未儲存的作者');
+    assert.equal(app.calls.some(call=>call.method==='POST'),false);
+    app.document.getElementById('filter-matched').click();
+    assert.equal(app.document.querySelectorAll('#posts .post').length,0);
+    assert.deepEqual(app.errors,[]);
+  } finally {await app.close();}
 });
 
 test('restored token enables Telegram with an empty write-only input and explicit forget clears it',async()=>{

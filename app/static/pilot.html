@@ -32,7 +32,10 @@
                 <select id="match-mode"><option value="any">符合任一關鍵字</option><option value="all">符合全部關鍵字</option></select>
                 <label for="excludes">不想看到的詞 <span class="optional">選填</span></label>
                 <textarea id="excludes" rows="2" placeholder="例如已結束、額滿"></textarea>
-                <p class="help">包含任何排除詞的貼文都不會自動通知。</p>
+                <p class="help">只比對貼文內文，包含任何排除詞即排除。</p>
+                <label for="excluded-authors">排除的發文者 <span class="optional">選填</span></label>
+                <textarea id="excluded-authors" rows="3" maxlength="12100" placeholder="每行填一位發文者的完整顯示名稱"></textarea>
+                <p class="help">依完整顯示名稱比對，英文忽略大小寫。可從下方貼文預覽複製名稱。</p>
               </div>
             </details>
             <div class="save-row"><button id="save-settings" type="submit" class="button secondary">儲存設定</button><span id="draft-status" class="draft-status">正在讀取設定…</span></div>

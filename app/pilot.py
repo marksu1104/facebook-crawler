@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, SecretStr, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from .models import match_keywords
+from .models import author_is_excluded, match_keywords
 from .notifications import build_digests, format_time, normalize_published_at
 from .pilot_browser import PilotBrowser, PilotBrowserError, PilotCancelled, PilotTransientError, pilot_group_url
 from .telegram import TelegramClient, TelegramError, TelegramRateLimited
@@ -37,6 +37,7 @@ class PilotSettings(BaseModel):
     browser: str = "auto"
     keywords: list[str] = Field(default_factory=list, max_length=30)
     excludes: list[str] = Field(default_factory=list, max_length=30)
+    excluded_authors: list[str] = Field(default_factory=list, max_length=100)
     match_mode: str = "any"
     interval_seconds: int = Field(default=120, ge=60, le=3600)
     tracking_mode: str = "continuous"
@@ -90,6 +91,18 @@ class PilotSettings(BaseModel):
         if value not in {"any", "all"}:
             raise ValueError("比對方式須為 any 或 all")
         return value
+
+    @field_validator("excluded_authors")
+    @classmethod
+    def clean_authors(cls, values):
+        names = {}
+        for value in values:
+            name = " ".join(value.split())
+            if len(name) > 120:
+                raise ValueError("每位發文者名稱最多 120 字")
+            if name:
+                names.setdefault(name.casefold(), name)
+        return list(names.values())
 
     @field_validator("telegram_chat_id")
     @classmethod
@@ -179,8 +192,11 @@ class PilotDatabase:
 
     @staticmethod
     def scope(settings):
-        return json.dumps({key: settings[key] for key in
-                           ("keywords", "excludes", "match_mode", "max_posts_per_check")}, sort_keys=True)
+        values = {key: settings[key] for key in ("keywords", "excludes", "match_mode", "max_posts_per_check")}
+        # An empty list keeps pre-existing baseline fingerprints compatible.
+        if settings.get("excluded_authors"):
+            values["excluded_authors"] = settings["excluded_authors"]
+        return json.dumps(values, sort_keys=True)
 
     def has_baseline(self, group, settings):
         with self.connect() as db:
@@ -198,9 +214,9 @@ class PilotDatabase:
 
     @staticmethod
     def _reclassify(db, group, settings):
-        rows = db.execute("SELECT id,content,notification_status FROM posts WHERE group_url=?", (group,)).fetchall()
+        rows = db.execute("SELECT id,author,content,notification_status FROM posts WHERE group_url=?", (group,)).fetchall()
         for row in rows:
-            matched, hits = match_keywords(row["content"], settings)
+            matched, hits = match_keywords(row["content"], settings, row["author"])
             delivery_status = row["notification_status"]
             if delivery_status in {"preview", "not_matched"}:
                 delivery_status = "preview" if matched else "not_matched"
@@ -225,22 +241,26 @@ class PilotDatabase:
         if not post_id or not post.get("url"):
             return None, False
         identity = hashlib.sha256((group + "\n" + post_id).encode()).hexdigest()[:32]
-        matched, hits = match_keywords(post["content"], task)
         published = "" if post.get("timestamp_conflict") else normalize_published_at(post.get("published_at", ""))
-        status = "baseline" if baseline else "pending" if matched else "not_matched"
         with self.connect() as db:
+            author = str(post.get("author") or "").strip()
+            if not author:
+                previous = db.execute("SELECT author FROM posts WHERE id=?", (identity,)).fetchone()
+                author = previous["author"] if previous else ""
+            matched, hits = match_keywords(post["content"], task, author)
+            status = "baseline" if baseline else "pending" if matched else "not_matched"
             result = db.execute("""INSERT OR IGNORE INTO posts
                 (id,group_url,post_id,author,content,url,posted_at,matched,hits,first_seen,is_baseline,notification_status,published_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", (identity, group, post_id, post.get("author", ""),
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", (identity, group, post_id, author,
                 post["content"], post["url"], post.get("posted_at", ""), matched,
                 json.dumps(hits, ensure_ascii=False), timestamp(), baseline, status, published))
             inserted = bool(result.rowcount)
             if not inserted:
-                db.execute("""UPDATE posts SET content=?,matched=?,hits=?,posted_at=?,
+                db.execute("""UPDATE posts SET author=?,content=?,matched=?,hits=?,posted_at=?,
                            published_at=CASE WHEN ? THEN '' WHEN ?<>'' THEN ? ELSE published_at END,
                            notification_status=CASE WHEN notification_status='pending' AND ?=0 THEN 'not_matched'
                                                     ELSE notification_status END WHERE id=?""",
-                           (post["content"], matched, json.dumps(hits, ensure_ascii=False), post.get("posted_at", ""), bool(post.get("timestamp_conflict")), published, published, matched, identity))
+                           (author, post["content"], matched, json.dumps(hits, ensure_ascii=False), post.get("posted_at", ""), bool(post.get("timestamp_conflict")), published, published, matched, identity))
         return self.post(identity), inserted
 
     @staticmethod
@@ -347,7 +367,10 @@ class Pilot:
                       "preview_post_ids": list(self.preview_order),
                       "scan_summary": dict(getattr(self.browser, "scan_summary", {}))}
             group = self.group
-        return {"settings": settings, "status": status, "posts": self.db.posts(group), "events": self.db.events()}
+            posts = self.db.posts(group)
+            for post in posts:
+                post["author_excluded"] = author_is_excluded(post["author"], settings)
+        return {"settings": settings, "status": status, "posts": posts, "events": self.db.events()}
 
     def save_settings(self, body: PilotSettings):
         with self.lock:
@@ -365,7 +388,7 @@ class Pilot:
             if values["remember_telegram_token"] and token:
                 encrypted_token = self.token_cipher.encrypt(token)
             changed_scope = any(values[key] != self.settings[key] for key in
-                                ("group_url", "keywords", "excludes", "match_mode", "max_posts_per_check"))
+                                ("group_url", "keywords", "excludes", "excluded_authors", "match_mode", "max_posts_per_check"))
             group_changed = values["group_url"] != self.settings["group_url"]
             delivery_changed = (values["telegram_chat_id"] != self.settings["telegram_chat_id"] or
                                 (bool(proposed_token) and proposed_token != self.token))
