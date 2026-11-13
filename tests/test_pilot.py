@@ -34,7 +34,8 @@ class TestTokenCipher:
 
 @pytest.fixture(autouse=True)
 def portable_token_cipher(monkeypatch):
-    monkeypatch.setattr("app.pilot.WindowsTokenCipher", TestTokenCipher)
+    monkeypatch.setattr("app.pilot.default_token_cipher", lambda data_dir: TestTokenCipher())
+    monkeypatch.setattr("app.pilot.token_storage_supported", lambda: True)
 
 
 @pytest.fixture(autouse=True)

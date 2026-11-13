@@ -4,6 +4,8 @@ Manual sign-in with bounded feed loading and passive response collection.
 """
 import os
 import re
+import shutil
+import sys
 import threading
 import time
 from pathlib import Path
@@ -154,6 +156,37 @@ def check_snapshot(snapshot: dict) -> None:
         raise NeedsUserAction("頁面可能顯示 Facebook 存取限制或安全檢查，已停止自動存取。請親自確認狀態。")
 
 
+def installed_browser(preference="auto"):
+    order = ("edge", "chrome") if sys.platform == "win32" else ("chrome", "edge")
+    if preference != "auto":
+        order = (preference,)
+    commands = {
+        "chrome": ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"),
+        "edge": ("microsoft-edge", "microsoft-edge-stable", "msedge"),
+    }
+    for browser in order:
+        for command in commands[browser]:
+            executable = shutil.which(command)
+            if executable:
+                return browser, executable
+        if sys.platform == "win32":
+            relative = {"edge": "Microsoft/Edge/Application/msedge.exe",
+                        "chrome": "Google/Chrome/Application/chrome.exe"}[browser]
+            candidates = [Path(root) / relative for variable in ("PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA")
+                          if (root := os.environ.get(variable))]
+        elif sys.platform == "darwin":
+            application = {"edge": "Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+                           "chrome": "Google Chrome.app/Contents/MacOS/Google Chrome"}[browser]
+            candidates = [root / application for root in (Path("/Applications"), Path.home() / "Applications")]
+        else:
+            candidates = []
+        for candidate in candidates:
+            if candidate.is_file():
+                return browser, str(candidate)
+    # Selenium Manager also discovers nonstandard installations and driver versions.
+    return order[0], None
+
+
 class PilotBrowser:
     def __init__(self, profile_dir: Path, factory=None):
         self.profile_dir = profile_dir
@@ -180,11 +213,10 @@ class PilotBrowser:
     def _new_driver(self, preference):
         from selenium import webdriver
 
-        browser = preference
-        if browser == "auto":
-            edge = Path(os.environ.get("PROGRAMFILES(X86)", "C:/Program Files (x86)")) / "Microsoft/Edge/Application/msedge.exe"
-            browser = "edge" if edge.exists() else "chrome"
+        browser, executable = installed_browser(preference)
         options = webdriver.EdgeOptions() if browser == "edge" else webdriver.ChromeOptions()
+        if executable:
+            options.binary_location = executable
         profile = self.profile_dir / browser
         profile.mkdir(parents=True, exist_ok=True)
         options.add_argument(f"--user-data-dir={profile.resolve()}")

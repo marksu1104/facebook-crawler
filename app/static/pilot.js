@@ -245,9 +245,9 @@
     ['max-checks', 'duration-minutes'].forEach(id => { $(id).disabled = unavailable || auto || $('tracking-mode').value !== 'limited'; });
     $('remember-telegram-token').disabled = unavailable || auto || settings.telegram_storage_supported !== true;
     $('forget-telegram-token').disabled = unavailable || auto || state.dirty || !(settings.telegram_configured || settings.telegram_token_saved);
-    let storageMessage = '勾選並儲存後，Token 會使用目前的 Windows 帳戶加密，重開程式自動載入。';
+    let storageMessage = '勾選並儲存後，Token 會透過目前帳戶的系統安全儲存加密保護，重開程式自動載入。';
     if (settings.telegram_storage_supported === undefined) storageMessage = '重新啟動程式後，即可使用記住 Token 功能。';
-    else if (!settings.telegram_storage_supported) storageMessage = '此系統目前僅支援在本次執行使用 Token，Windows 可加密保存。';
+    else if (!settings.telegram_storage_supported) storageMessage = '此系統目前無法使用安全儲存，Token 僅保留於本次執行。macOS／Linux 請確認系統鑰匙圈已啟用並解鎖。';
     else if (settings.telegram_storage_error) storageMessage = sanitize(settings.telegram_storage_error);
     else if (!$('remember-telegram-token').checked) storageMessage = '儲存設定後會移除已保存的 Token，本次執行仍可繼續使用。';
     else if (settings.telegram_token_saved) storageMessage = 'Token 已加密保存，重開程式會自動載入。';

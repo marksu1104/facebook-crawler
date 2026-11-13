@@ -6,18 +6,27 @@
 
 ## 執行需求
 
-- Windows、Python 3.10 以上，以及 Microsoft Edge 或 Google Chrome。
+- Windows、macOS 或 Linux 桌面環境，Python 3.10 以上，以及 Google Chrome 或 Microsoft Edge。Linux 也可使用 Chromium。
+- macOS 建議使用 Python 官網的安裝程式。Linux 需有可開啟瀏覽器的桌面工作階段；部分發行版需先安裝 `python3-venv`。
 - 首次啟動需連線安裝 Python 套件。Selenium 會管理瀏覽器驅動程式。
 - 持續追蹤可連續運行數天，需保持電腦開機、程式與追蹤瀏覽器執行，並維持網路連線。
 
 ## 開始使用
 
-1. 下載或 clone 此 repo，雙擊 `start.cmd`。`verify.cmd` 也可啟動同一個程式。
+1. 下載或 clone 此 repo，依下表啟動。程式會自動建立 `.venv` 並安裝套件，後續啟動會檢查套件清單是否變更。
 2. 等待安裝完成，瀏覽器會開啟 [本機操作頁面](http://127.0.0.1:8766/)。
 3. 填入可查看的 Facebook 社團首頁或 `share/g` 分享網址，設定關鍵字與排除詞，再儲存。
 4. 按「開啟 Facebook 追蹤視窗」，在獨立視窗親自登入並完成驗證，將社團排序切換為「新貼文」。
 5. 回到操作頁按「已登入，確認社團」，再按「讀取貼文預覽」。首次讀取建立追蹤起點，已收錄的舊文保留在預覽中。
 6. 完成下方 Telegram 設定並測試手機送達，再按「開始追蹤」。
+
+| 系統 | 啟動方式 |
+| --- | --- |
+| Windows | 雙擊 `start.cmd`，`verify.cmd` 也可啟動 |
+| macOS | 雙擊 `start.command`，或在專案目錄執行 `sh start.command` |
+| Linux | 在專案目錄執行 `sh start.sh` |
+
+macOS 若提示檔案沒有執行權限，可在專案目錄執行 `chmod +x start.command` 再雙擊。三平台共用 `start.py`，也可用 Python 3.10 以上執行 `python3 start.py`。移動專案至其他作業系統時，請重新建立該系統的 `.venv`。
 
 啟動程式後需手動確認社團並開始追蹤。首次有效讀取會保存追蹤起點，之後重開程式並確認同一社團時，會沿用起點與去重紀錄。電腦睡眠會暫停檢查，恢復後按排程繼續；程式結束或關機後需重新啟動。可按「停止追蹤」停止排程，按頁面底部「結束程式」或在啟動視窗按 Ctrl+C 結束程式。
 
@@ -29,7 +38,9 @@
 4. 按「讀取聊天清單」，核對並選擇自己的私人聊天，再儲存接收對象。
 5. 按「發送測試訊息」，確認手機收到。也可在貼文預覽按「發送這篇測試通知」，驗證原文連結。
 
-Windows 使用目前使用者的 DPAPI 加密保存 Token，同一個 Windows 帳戶重開程式時會自動載入。Token 欄位儲存後清空，設定 API 只回傳設定與保存狀態。取消勾選並儲存會移除保存的副本，本次執行仍可使用；「清除 Token」會同時清除本次設定與保存的副本。其他作業系統目前僅保留本次執行的 Token。
+Windows 使用目前使用者的 DPAPI 加密保存 Token。macOS 使用 Keychain，Linux 使用 Secret Service 相容鑰匙圈（例如 GNOME Keyring）保存加密金鑰，以 Fernet 加密 Token 後存入本機資料庫。相同系統帳戶重開程式時會自動載入。Linux 需啟用鑰匙圈服務與桌面的 D-Bus 工作階段；安全儲存無法使用時，介面會停用「記住」選項，Token 可供本次執行使用。
+
+Token 欄位儲存後清空，設定 API 只回傳設定與保存狀態。取消勾選並儲存會移除保存的 Token，本次執行仍可使用；「清除 Token」會同時清除本次設定與保存的 Token。macOS／Linux 鑰匙圈會保留加密金鑰，供之後重新設定時使用。
 
 聊天清單顯示曾向 Bot 傳送 `/start` 的私人聊天室，選擇前請核對接收對象。
 
@@ -52,9 +63,10 @@ Facebook 頁面可能變更，截斷或尚未載入的內容可能漏讀。「�
 
 ## 驗證狀態
 
-- 已通過假瀏覽器、模擬 Telegram transport、DOM 與 Windows DPAPI 的自動化測試，涵蓋跨日排程、延後重試、合併通知、分段途中失敗、舊資料庫升級與重啟後的去重。
+- 自動化測試涵蓋假瀏覽器、模擬 Telegram transport、DOM、Windows DPAPI 與鑰匙圈加密，包含跨日排程、延後重試、合併通知、分段途中失敗、舊資料庫升級與重啟後的去重。
+- GitHub Actions 在 Windows、macOS 與 Ubuntu 執行測試，包含啟動操作頁、乾淨結束程式與實際 Chrome 啟動。登入 Facebook 的人工驗證目前完成於 Windows。
 - 已在實際登入的社團驗證多篇主文、原文連結、背景讀取與修改條件後的重新比對。
-- **Telegram 通知實際送達手機仍待確認。** 可使用「發送測試訊息」與單篇貼文測試功能完成驗證。
+- 已完成 Telegram 實際通知與格式確認。首次設定時請使用「發送測試訊息」確認自己的手機送達。
 
 ## 開發與自訂
 
@@ -74,16 +86,28 @@ npm ci --ignore-scripts
 npm test
 ```
 
+macOS／Linux 可使用下列開發指令，Node.js 僅供 JavaScript 測試使用。
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python verify.py --no-browser
+.venv/bin/python -m pytest -q
+npm ci --ignore-scripts
+npm test
+```
+
 | 路徑 | 用途 |
 | --- | --- |
-| `verify.py`、`scripts/start.ps1` | 本機啟動與重複啟動檢查 |
+| `start.py`、`start.cmd`、`start.command`、`start.sh` | 三平台環境準備與啟動 |
+| `verify.py` | 本機服務與重複啟動檢查 |
 | `app/pilot.py` | 設定、SQLite、操作流程、排程與通知狀態 |
 | `app/pilot_browser.py` | 手動登入與有限次數的社團讀取 |
 | `app/post_extractor.js`、`app/post_metadata.js` | 可見主文與已載入貼文資料的擷取 |
 | `app/feed_traffic.py` | 目前瀏覽器文件已接收的 feed 回應 |
 | `app/models.py`、`app/browser.py` | 關鍵字比對與原文網址正規化 |
 | `app/notifications.py` | 合併通知、預覽長度與時區時間格式 |
-| `app/telegram.py`、`app/token_store.py` | Telegram 通知與 Windows Token 加密 |
+| `app/telegram.py`、`app/token_store.py` | Telegram 通知與系統安全儲存 |
 | `app/static/pilot.*` | 操作介面 |
 | `tests/` | Python 與 JavaScript 測試 |
 

@@ -1,6 +1,9 @@
-"""Protect a locally remembered token with the current Windows user's DPAPI."""
+"""Protect remembered tokens using DPAPI or a key held in the OS credential store."""
 import ctypes
+import hashlib
 import os
+import re
+import sys
 from ctypes import wintypes
 
 
@@ -65,3 +68,85 @@ class WindowsTokenCipher:
         if not token or len(token.encode("utf-8")) > self.max_token_bytes:
             raise TokenStorageError("已儲存的 Token 格式不正確，請重新輸入並儲存。")
         return token
+
+
+class SystemKeyringCipher:
+    prefix = b"social-watch:keyring-fernet:v1\0"
+    service = "facebook-crawler"
+
+    def __init__(self, data_dir, backend=None):
+        self.data_dir = data_dir
+        self.account = hashlib.sha256(str(data_dir.resolve()).encode("utf-8")).hexdigest()
+        self.backend = backend or system_keyring()
+        self.supported = self.backend is not None
+
+    def _fernet(self, account, *, create=False):
+        from cryptography.fernet import Fernet
+
+        if not self.supported:
+            raise TokenStorageError("請先啟用並解鎖系統鑰匙圈，或取消記住 Token 後儲存。")
+        if create:
+            # Serialise first-key creation across app processes sharing this profile.
+            # This path is used only on macOS and Linux.
+            import fcntl
+
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            with (self.data_dir / "token-key.lock").open("a+b") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                key = self.backend.get_password(self.service, account)
+                if key is None:
+                    key = Fernet.generate_key().decode("ascii")
+                    self.backend.set_password(self.service, account, key)
+        else:
+            key = self.backend.get_password(self.service, account)
+        if not key:
+            raise TokenStorageError("系統鑰匙圈中的加密金鑰無法讀取，請重新設定 Token。")
+        return Fernet(key.encode("ascii"))
+
+    def encrypt(self, token):
+        value = token.encode("utf-8")
+        if not 0 < len(value) <= WindowsTokenCipher.max_token_bytes:
+            raise TokenStorageError("Token 長度不正確，請重新輸入。")
+        try:
+            encrypted = self._fernet(self.account, create=True).encrypt(value)
+            return self.prefix + self.account.encode("ascii") + b"\0" + encrypted
+        except Exception:
+            raise TokenStorageError("無法使用系統鑰匙圈保存 Token。請確認已解鎖，或取消記住 Token 後儲存。") from None
+
+    def decrypt(self, encrypted):
+        if (not isinstance(encrypted, bytes) or not encrypted.startswith(self.prefix)
+                or len(encrypted) > WindowsTokenCipher.max_blob_bytes):
+            raise TokenStorageError("已儲存的 Token 格式不正確，請重新輸入並儲存。")
+        try:
+            account, value = encrypted[len(self.prefix):].split(b"\0", 1)
+            if not re.fullmatch(rb"[a-f0-9]{64}", account):
+                raise ValueError
+            token = self._fernet(account.decode("ascii")).decrypt(value).decode("utf-8")
+            if not 0 < len(token.encode("utf-8")) <= WindowsTokenCipher.max_token_bytes:
+                raise ValueError
+            return token
+        except Exception:
+            raise TokenStorageError("無法使用系統鑰匙圈讀取 Token，請確認已解鎖或重新設定。") from None
+
+
+def system_keyring():
+    """Use the native credential service directly, avoiding third-party fallbacks."""
+    try:
+        if sys.platform == "darwin":
+            from keyring.backends.macOS import Keyring
+        elif sys.platform.startswith("linux"):
+            from keyring.backends.SecretService import Keyring
+        else:
+            return None
+        backend = Keyring()
+        return backend if backend.priority > 0 else None
+    except Exception:
+        return None
+
+
+def token_storage_supported():
+    return WindowsTokenCipher.supported or system_keyring() is not None
+
+
+def default_token_cipher(data_dir):
+    return WindowsTokenCipher() if os.name == "nt" else SystemKeyringCipher(data_dir)

@@ -1,0 +1,63 @@
+name: Cross-platform checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+        python: ['3.12']
+        include:
+          - os: ubuntu-latest
+            python: '3.10'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Check Python and native Chrome startup
+        run: python -m pytest -q
+        env:
+          SOCIAL_WATCH_BROWSER_SMOKE: '1'
+      - name: Install JavaScript test dependencies
+        run: npm ci --ignore-scripts
+      - name: Check interface and extraction scripts
+        run: npm test
+      - name: Check macOS Keychain
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          keychain_path="$RUNNER_TEMP/social-watch-test.keychain-db"
+          security create-keychain -p ci-test-password "$keychain_path"
+          security unlock-keychain -p ci-test-password "$keychain_path"
+          security default-keychain -s "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          SOCIAL_WATCH_NATIVE_KEYRING=1 python -m pytest -q tests/test_token_store.py -k native_system_keyring
+      - name: Install Linux test keyring
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y gnome-keyring
+      - name: Check Linux Secret Service
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          dbus-run-session -- sh -eu -c '
+            printf "%s" ci-test-password | gnome-keyring-daemon --unlock
+            SOCIAL_WATCH_NATIVE_KEYRING=1 python -m pytest -q tests/test_token_store.py -k native_system_keyring
+          '

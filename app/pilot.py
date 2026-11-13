@@ -22,7 +22,7 @@ from .models import author_is_excluded, match_keywords
 from .notifications import build_digests, format_time, normalize_published_at
 from .pilot_browser import PilotBrowser, PilotBrowserError, PilotCancelled, PilotTransientError, pilot_group_url
 from .telegram import TelegramClient, TelegramError, TelegramRateLimited
-from .token_store import TokenStorageError, WindowsTokenCipher
+from .token_store import TokenStorageError, default_token_cipher, token_storage_supported
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).resolve().parent / "static"
@@ -47,7 +47,7 @@ class PilotSettings(BaseModel):
     notification_timezone: str = "Asia/Taipei"
     telegram_chat_id: str = ""
     telegram_token: SecretStr | None = None
-    remember_telegram_token: bool = Field(default_factory=lambda: WindowsTokenCipher.supported)
+    remember_telegram_token: bool = Field(default_factory=lambda: token_storage_supported())
 
     @field_validator("tracking_mode")
     @classmethod
@@ -163,7 +163,7 @@ class PilotDatabase:
     def load_settings(self):
         with self.connect() as db:
             row = db.execute("SELECT value FROM settings WHERE id=1").fetchone()
-        # Settings contain only the remember preference. The token lives in a DPAPI blob.
+        # Settings contain only the remember preference. Tokens are stored encrypted separately.
         values = json.loads(row[0]) if row else {}
         values.pop("telegram_token", None)
         return PilotSettings(**values).model_dump(exclude={"telegram_token"})
@@ -303,7 +303,7 @@ class Pilot:
         self.lock = threading.RLock()
         self.telegram_lock = threading.Lock()
         self.token = ""
-        self.token_cipher = token_cipher or WindowsTokenCipher()
+        self.token_cipher = token_cipher or default_token_cipher(data_dir)
         self.token_storage_error = ""
         encrypted_token = self.db.saved_token()
         if encrypted_token and self.settings["remember_telegram_token"]:
